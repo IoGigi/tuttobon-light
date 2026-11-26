@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Wallet Buoni Spesa</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); padding-bottom: 90px; }
+    header {
+      background: #1e293b;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    .totale-badge {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+    .container { max-width: 600px; margin: 0 auto; padding: 16px; }
+    .upload-box {
+      background: var(--card);
+      border: 2px dashed var(--primary);
+      border-radius: 14px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 18px;
+      cursor: pointer;
+    }
+    .upload-box p { margin: 6px 0 0; color: var(--muted); font-size: 0.85rem; }
+    .btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 11px 16px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-secondary { background: #334155; color: var(--text); }
+    .btn-success { background: var(--success); color: #052e16; }
+    .btn-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-sm { padding: 7px 11px; font-size: 0.82rem; border-radius: 8px; }
+
+    .form-card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 20px;
+      border: 1px solid var(--border);
+      display: none;
+    }
+    .form-card.active { display: block; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: white;
+      font-size: 1rem;
+    }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .toolbar label { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .backup-actions { display: flex; gap: 6px; }
+
+    .buono-card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+    .buono-card.esaurito { opacity: 0.5; }
+    .buono-info h3 { margin: 0 0 4px; font-size: 1.05rem; }
+    .buono-meta { font-size: 0.8rem; color: var(--muted); }
+    .buono-importo { text-align: right; }
+    .buono-importo .residuo { font-size: 1.25rem; font-weight: 800; color: var(--success); display: block; }
+    .buono-card.esaurito .residuo { color: var(--muted); text-decoration: line-through; }
+    .buono-importo .iniziale { font-size: 0.75rem; color: var(--muted); }
+
+    /* Modalità Cassa ad alto contrasto */
+    .cassa-modal {
+      position: fixed;
+      inset: 0;
+      background: #ffffff;
+      color: #0f172a;
+      z-index: 100;
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    .cassa-modal.active { display: flex; }
+    .cassa-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 12px;
+    }
+    .cassa-header h2 { margin: 0; font-size: 1.3rem; }
+    .cassa-barcode-box {
+      background: #ffffff;
+      padding: 20px 10px;
+      margin: 16px 0;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .cassa-barcode-box svg { max-width: 100%; height: auto; }
+    .cassa-saldo-box {
+      background: #f1f5f9;
+      padding: 14px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    .cassa-saldo-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+    .cassa-saldo-val { font-size: 1.6rem; font-weight: 800; color: #059669; }
+    .scala-row { display: flex; gap: 8px; }
+    .scala-row input {
+      flex: 1;
+      padding: 10px;
+      font-size: 1.1rem;
+      border: 2px solid #cbd5e1;
+      border-radius: 8px;
+      font-weight: 700;
+    }
+    .movimenti-list { margin-top: 14px; font-size: 0.85rem; }
+    .movimenti-list h4 { margin: 0 0 8px; color: #475569; }
+    .movimento-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .loader {
+      display: none;
+      text-align: center;
+      padding: 14px;
+      background: rgba(59, 130, 246, 0.15);
+      border-radius: 10px;
+      margin-bottom: 16px;
+      color: #93c5fd;
+      font-weight: 600;
+    }
+    .loader.active { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎟️ Buoni Spesa</h1>
+    <div class="totale-badge" id="totaleDisponibile">0,00 €</div>
+  </header>
+
+  <div class="container">
+    <div class="upload-box" id="dropZone">
+      <strong>+ Importa PDF (Amilon) o Screenshot (BuyOn)</strong>
+      <p>Tocca per selezionare un file oppure usa "Condividi" dal telefono</p>
+      <input type="file" id="fileInput" accept="image/*,application/pdf" hidden />
+    </div>
+
+    <div style="text-align: right; margin-bottom: 14px;">
+      <button class="btn btn-secondary btn-sm" id="btnManuale">✍️ Inserisci a mano</button>
+    </div>
+
+    <div class="loader" id="loader">⏳ Lettura codice a barre e dati in corso (100% locale)...</div>
+
+    <form class="form-card" id="buonoForm">
+      <h3 style="margin-top:0;">Verifica Dati Buono</h3>
+      <div class="form-group">
+        <label>Negozio / Supermercato</label>
+        <input type="text" id="inputNegozio" placeholder="Es. Martinelli, Rossetto, Q8..." required />
+      </div>
+      <div class="row-2">
+        <div class="form-group">
+          <label>Importo (€)</label>
+          <input type="number" step="0.01" id="inputImporto" placeholder="50.00" required />
+        </div>
+        <div class="form-group">
+          <label>Scadenza (opz.)</label>
+          <input type="text" id="inputScadenza" placeholder="31/12/2026" />
+        </div>
+      </div>
+      <div class="row-2">
+        <div class="form-group">
+          <label>Codice a Barre</label>
+          <input type="text" id="inputCodice" placeholder="8001234567890" required />
+        </div>
+        <div class="form-group">
+          <label>Formato</label>
+          <select id="inputFormato">
+            <option value="CODE128">CODE 128 (Standard)</option>
+            <option value="EAN13">EAN-13</option>
+            <option value="EAN8">EAN-8</option>
+            <option value="UPC">UPC-A</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button type="button" class="btn btn-secondary" id="btnAnnulla">Annulla</button>
+        <button type="submit" class="btn btn-success">💾 Salva nel Wallet</button>
+      </div>
+    </form>
+
+    <div class="toolbar">
+      <label>
+        <input type="checkbox" id="toggleEsauriti" /> Mostra esauriti
+      </label>
+      <div class="backup-actions">
+        <button class="btn btn-secondary btn-sm" id="btnExport">⬇️ Backup</button>
+        <button class="btn btn-secondary btn-sm" id="btnImportBackup">⬆️ Ripristina</button>
+        <input type="file" id="backupInput" accept=".json" hidden />
+      </div>
+    </div>
+
+    <div id="listaBuoni"></div>
+  </div>
+
+  <!-- MODALE CASSA AD ALTO CONTRASTO -->
+  <div class="cassa-modal" id="cassaModal">
+    <div class="cassa-header">
+      <div>
+        <h2 id="cassaNegozio">Negozio</h2>
+        <small id="cassaScadenza" style="color:#64748b;"></small>
+      </div>
+      <button class="btn btn-secondary" id="btnChiudiCassa">✕ Chiudi</button>
+    </div>
+
+    <div class="cassa-barcode-box">
+      <svg id="barcodeSvg"></svg>
+      <div id="cassaCodiceTesto" style="font-family:monospace; font-size:1.1rem; font-weight:700; margin-top:6px;"></div>
+    </div>
+
+    <div class="cassa-saldo-box">
+      <div class="cassa-saldo-top">
+        <span>Credito Residuo:</span>
+        <span class="cassa-saldo-val" id="cassaResiduo">0,00 €</span>
+      </div>
+      <div class="scala-row">
+        <input type="number" step="0.01" id="inputSpesa" placeholder="Importo speso €" />
+        <button class="btn btn-primary" id="btnScala">Scala</button>
+        <button class="btn btn-success" id="btnUsaTutto">Usa tutto</button>
+      </div>
+
+      <div class="movimenti-list" id="cassaMovimenti"></div>
+    </div>
+
+    <div style="margin-top:auto; padding-top:16px; text-align:right;">
+      <button class="btn btn-danger btn-sm" id="btnEliminaBuono">🗑️ Elimina Buono</button>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
