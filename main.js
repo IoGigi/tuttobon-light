@@ -1,247 +1,320 @@
 import JsBarcode from 'jsbarcode';
 import { analizzaBuono } from './src/estrattoreBuoni.js';
+import { getAllBuoni, saveBuono, deleteBuono, clearAndImportAll } from './src/db.js';
 
-const STORAGE_KEY = 'wallet_buoni_v2';
-let buoni = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-let buonoAttivoId = null;
+let buoniCache = [];
+let buonoCorrenteId = null;
+let immagineEmergenzaTemp = null;
 let wakeLock = null;
 
-// Registrazione Service Worker
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(console.error);
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'SHARED_FILE' && event.data.file) {
-      gestisciFile(event.data.file);
-    }
-  });
+const el = (id) => document.getElementById(id);
+
+function showStatus(msg, type = 'info') {
+  const box = el('statusMsg');
+  box.textContent = msg;
+  box.className = 'status-msg status-' + type;
+  box.style.display = 'block';
 }
 
-// Elementi DOM
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const loader = document.getElementById('loader');
-const buonoForm = document.getElementById('buonoForm');
-const listaBuoniEl = document.getElementById('listaBuoni');
-const totaleDisponibileEl = document.getElementById('totaleDisponibile');
-const toggleEsauriti = document.getElementById('toggleEsauriti');
-
-// Eventi Upload & Form
-dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', (e) => {
-  if (e.target.files[0]) gestisciFile(e.target.files[0]);
-});
-
-document.getElementById('btnManuale').addEventListener('click', () => {
-  buonoForm.reset();
-  buonoForm.classList.add('active');
-});
-
-document.getElementById('btnAnnulla').addEventListener('click', () => {
-  buonoForm.classList.remove('active');
-});
-
-async function gestisciFile(file) {
-  loader.classList.add('active');
-  buonoForm.classList.remove('active');
-  try {
-    const dati = await analizzaBuono(file);
-    document.getElementById('inputNegozio').value = dati.negozio || '';
-    document.getElementById('inputImporto').value = dati.importo || '';
-    document.getElementById('inputCodice').value = dati.codiceBarre || '';
-    document.getElementById('inputFormato').value = dati.formatoBarcode || 'CODE128';
-    document.getElementById('inputScadenza').value = dati.scadenza || '';
-    buonoForm.classList.add('active');
-  } catch (err) {
-    alert('Errore nella lettura del file. Puoi inserire i dati manualmente.');
-    buonoForm.classList.add('active');
-  } finally {
-    loader.classList.remove('active');
-    fileInput.value = '';
-  }
-}
-
-buonoForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const negozio = document.getElementById('inputNegozio').value.trim();
-  const importo = parseFloat(document.getElementById('inputImporto').value);
-  const codice = document.getElementById('inputCodice').value.trim();
-  const formato = document.getElementById('inputFormato').value;
-  const scadenza = document.getElementById('inputScadenza').value.trim();
-
-  // Auto-apprendimento nuovo negozio per i prossimi import
-  if (negozio) {
-    const salvati = JSON.parse(localStorage.getItem('negozi_custom_v1') || '[]');
-    if (!salvati.some(n => n.toLowerCase() === negozio.toLowerCase())) {
-      salvati.push(negozio);
-      localStorage.setItem('negozi_custom_v1', JSON.stringify(salvati));
-    }
-  }
-
-  const nuovoBuono = {
-    id: Date.now().toString(),
-    negozio,
-    importoIniziale: importo,
-    residuo: importo,
-    codice,
-    formato,
-    scadenza,
-    movimenti: []
-  };
-
-  buoni.unshift(nuovoBuono);
-  salvaStorage();
-  buonoForm.reset();
-  buonoForm.classList.remove('active');
-  renderLista();
-});
-
-function salvaStorage() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(buoni));
+function hideStatus() {
+  el('statusMsg').style.display = 'none';
 }
 
 function formatEuro(num) {
-  return num.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+  return Number(num || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 }
 
-function renderLista() {
-  const mostraEsauriti = toggleEsauriti.checked;
-  let totale = 0;
-  listaBuoniEl.innerHTML = '';
-
-  buoni.forEach(b => {
-    if (b.residuo > 0) totale += b.residuo;
-    if (b.residuo <= 0 && !mostraEsauriti) return;
-
-    const card = document.createElement('div');
-    card.className = 'buono-card' + (b.residuo <= 0 ? ' esaurito' : '');
-    card.innerHTML = `
-      <div class="buono-info">
-        <h3>${b.negozio}</h3>
-        <div class="buono-meta">
-          ${b.scadenza ? 'Scad: ' + b.scadenza + ' • ' : ''}Cod: ...${b.codice.slice(-4)}
-        </div>
-      </div>
-      <div class="buono-importo">
-        <span class="residuo">${formatEuro(b.residuo)}</span>
-        ${b.residuo < b.importoIniziale ? `<span class="iniziale">su ${formatEuro(b.importoIniziale)}</span>` : ''}
-      </div>
-    `;
-    card.addEventListener('click', () => apriModalitaCassa(b.id));
-    listaBuoniEl.appendChild(card);
-  });
-
-  totaleDisponibileEl.textContent = formatEuro(totale);
-}
-
-toggleEsauriti.addEventListener('change', renderLista);
-
-// Modalità Cassa
-const cassaModal = document.getElementById('cassaModal');
-
-async function apriModalitaCassa(id) {
-  const b = buoni.find(item => item.id === id);
-  if (!b) return;
-  buonoAttivoId = id;
-
-  document.getElementById('cassaNegozio').textContent = b.negozio;
-  document.getElementById('cassaScadenza').textContent = b.scadenza ? `Scadenza: ${b.scadenza}` : '';
-  document.getElementById('cassaCodiceTesto').textContent = b.codice;
-  document.getElementById('cassaResiduo').textContent = formatEuro(b.residuo);
-  document.getElementById('inputSpesa').value = '';
+async function gestisciFileCaricato(file) {
+  if (!file) return;
+  el('formCard').style.display = 'none';
+  showStatus('⏳ Analisi del file in corso...', 'info');
 
   try {
-    JsBarcode('#barcodeSvg', b.codice, {
-      format: b.formato || 'CODE128',
-      lineColor: '#000000',
-      background: '#ffffff',
-      width: 2.2,
-      height: 95,
-      displayValue: false
+    const res = await analizzaBuono(file, (step) => {
+      showStatus('⏳ ' + step, 'info');
     });
-  } catch (e) {
-    JsBarcode('#barcodeSvg', b.codice, {
-      format: 'CODE128',
-      width: 2,
-      height: 95,
-      displayValue: false
-    });
-  }
 
-  renderMovimenti(b);
-  cassaModal.classList.add('active');
+    immagineEmergenzaTemp = res.immagineEmergenza || null;
+    el('inputNegozio').value = res.negozio || '';
+    el('inputImporto').value = res.importo !== null ? res.importo : '';
+    el('inputCodice').value = res.codiceBarre || '';
+    el('inputFormato').value = res.formatoBarcode || 'CODE128';
+    el('inputScadenza').value = res.scadenza || '';
+    el('diagnosticaText').textContent = res.diagnostica || '';
 
-  // Mantiene lo schermo acceso in cassa
-  if ('wakeLock' in navigator) {
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-    } catch (err) {}
+    el('formCard').style.display = 'block';
+    if (!res.codiceBarre) {
+      showStatus('⚠️ Documento letto, ma inserisci o controlla il codice a barre qui sotto.', 'info');
+    } else {
+      showStatus('✅ Dati estratti con successo! Controlla e salva.', 'ok');
+    }
+  } catch (err) {
+    console.error(err);
+    immagineEmergenzaTemp = null;
+    el('formCard').style.display = 'block';
+    showStatus('❌ Errore lettura automatica: ' + err.message + '. Puoi comunque inserire i dati a mano qui sotto.', 'err');
   }
 }
 
-function renderMovimenti(b) {
-  const cont = document.getElementById('cassaMovimenti');
-  if (!b.movimenti || b.movimenti.length === 0) {
-    cont.innerHTML = '';
+async function aggiornaLista() {
+  buoniCache = await getAllBuoni();
+  const mostraEsauriti = el('chkEsauriti').checked;
+  const container = el('listaBuoni');
+  container.innerHTML = '';
+
+  let totale = 0;
+  buoniCache.forEach((b) => {
+    if (b.residuo > 0) totale += Number(b.residuo);
+  });
+  el('totaleDisponibile').textContent = formatEuro(totale);
+
+  const filtrati = buoniCache.filter((b) => mostraEsauriti || b.residuo > 0.009);
+
+  if (filtrati.length === 0) {
+    container.innerHTML = '<p style="text-align:center; color:#64748b; margin-top:30px;">Nessun buono disponibile. Carica un PDF o uno screenshot qui sopra.</p>';
     return;
   }
-  cont.innerHTML = '<h4>Storico utilizzi:</h4>' + b.movimenti.map(m => `
-    <div class="movimento-item">
-      <span>${m.data}</span>
-      <strong>- ${formatEuro(m.importo)}</strong>
-    </div>
-  `).join('');
+
+  filtrati.forEach((b) => {
+    const div = document.createElement('div');
+    div.className = 'buono-item' + (b.residuo <= 0.009 ? ' esaurito' : '');
+    div.innerHTML = `
+      <div>
+        <div class="buono-negozio">${escapeHtml(b.negozio)}</div>
+        <div class="buono-meta">${b.scadenza ? 'Scad: ' + escapeHtml(b.scadenza) : 'Nessuna scadenza'} • ${escapeHtml(b.codiceBarre)}</div>
+      </div>
+      <div>
+        <div class="buono-importo">${formatEuro(b.residuo)}</div>
+        ${b.residuo < b.importoIniziale ? `<div class="buono-iniziale">su ${formatEuro(b.importoIniziale)}</div>` : ''}
+      </div>
+    `;
+    div.addEventListener('click', () => apriModalCassa(b.id));
+    container.appendChild(div);
+  });
 }
 
-document.getElementById('btnChiudiCassa').addEventListener('click', () => {
-  cassaModal.classList.remove('active');
-  buonoAttivoId = null;
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+async function apriModalCassa(id) {
+  const buono = buoniCache.find((b) => b.id === id);
+  if (!buono) return;
+  buonoCorrenteId = id;
+
+  el('cassaNegozio').textContent = buono.negozio;
+  el('cassaScadenza').textContent = buono.scadenza ? 'Scadenza: ' + buono.scadenza : '';
+  el('cassaCodiceTesto').textContent = buono.codiceBarre;
+  el('cassaResiduo').textContent = formatEuro(buono.residuo);
+  el('inputSpesaParziale').value = '';
+
+  // Render barcode vettoriale
+  const svg = el('barcodeSvg');
+  svg.innerHTML = '';
+  try {
+    JsBarcode(svg, buono.codiceBarre, {
+      format: buono.formatoBarcode || 'CODE128',
+      width: 2.2,
+      height: 95,
+      displayValue: false,
+      margin: 10
+    });
+  } catch (e) {
+    try {
+      JsBarcode(svg, buono.codiceBarre, {
+        format: 'CODE128',
+        width: 2,
+        height: 95,
+        displayValue: false
+      });
+    } catch (e2) {
+      svg.innerHTML = '';
+    }
+  }
+
+  // Documento originale
+  if (buono.immagineEmergenza) {
+    el('imgOriginale').src = buono.immagineEmergenza;
+    el('tabOriginale').style.display = 'block';
+  } else {
+    el('imgOriginale').removeAttribute('src');
+    el('tabOriginale').style.display = 'none';
+  }
+
+  attivaTab('barcode');
+  renderMovimenti(buono);
+  el('modalCassa').classList.add('open');
+
+  // Mantieni schermo acceso in cassa
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) {}
+}
+
+function attivaTab(quale) {
+  if (quale === 'barcode') {
+    el('tabBarcode').classList.add('active');
+    el('tabOriginale').classList.remove('active');
+    el('boxBarcode').style.display = 'block';
+    el('boxOriginale').style.display = 'none';
+  } else {
+    el('tabOriginale').classList.add('active');
+    el('tabBarcode').classList.remove('active');
+    el('boxBarcode').style.display = 'none';
+    el('boxOriginale').style.display = 'block';
+  }
+}
+
+function renderMovimenti(buono) {
+  const ul = el('listaMovimenti');
+  ul.innerHTML = '';
+  const movs = buono.movimenti || [];
+  if (movs.length === 0) {
+    ul.innerHTML = '<li>Nessun utilizzo registrato</li>';
+    return;
+  }
+  movs.forEach((m) => {
+    const li = document.createElement('li');
+    li.textContent = `${m.data}: -${formatEuro(m.speso)} (Residuo: ${formatEuro(m.residuoDopo)})`;
+    ul.appendChild(li);
+  });
+}
+
+// Event Listeners
+el('dropZone').addEventListener('click', () => el('fileInput').click());
+el('fileInput').addEventListener('change', (e) => {
+  if (e.target.files && e.target.files[0]) {
+    gestisciFileCaricato(e.target.files[0]);
+    e.target.value = '';
+  }
+});
+
+el('btnManuale').addEventListener('click', () => {
+  immagineEmergenzaTemp = null;
+  el('inputNegozio').value = '';
+  el('inputImporto').value = '';
+  el('inputCodice').value = '';
+  el('inputFormato').value = 'CODE128';
+  el('inputScadenza').value = '';
+  el('diagnosticaText').textContent = 'Inserimento manuale';
+  el('formCard').style.display = 'block';
+  hideStatus();
+});
+
+el('btnAnnullaForm').addEventListener('click', () => {
+  el('formCard').style.display = 'none';
+  hideStatus();
+});
+
+el('btnSalvaBuono').addEventListener('click', async () => {
+  const negozio = el('inputNegozio').value.trim();
+  const importo = parseFloat(el('inputImporto').value);
+  const codiceBarre = el('inputCodice').value.trim();
+  const formatoBarcode = el('inputFormato').value;
+  const scadenza = el('inputScadenza').value.trim();
+
+  if (!negozio || isNaN(importo) || importo <= 0 || !codiceBarre) {
+    showStatus('⚠️ Compila Negozio, Importo e Codice a barre prima di salvare.', 'err');
+    return;
+  }
+
+  // Salva negozio in auto-apprendimento
+  try {
+    const salvati = JSON.parse(localStorage.getItem('negozi_custom_v1') || '[]');
+    if (!salvati.some((n) => n.toLowerCase() === negozio.toLowerCase())) {
+      salvati.push(negozio);
+      localStorage.setItem('negozi_custom_v1', JSON.stringify(salvati));
+    }
+  } catch (e) {}
+
+  const nuovoBuono = {
+    id: 'buono_' + Date.now(),
+    negozio,
+    importoIniziale: importo,
+    residuo: importo,
+    codiceBarre,
+    formatoBarcode,
+    scadenza,
+    immagineEmergenza: immagineEmergenzaTemp,
+    movimenti: [],
+    createdAt: Date.now()
+  };
+
+  await saveBuono(nuovoBuono);
+  el('formCard').style.display = 'none';
+  immagineEmergenzaTemp = null;
+  showStatus('✅ Buono salvato!', 'ok');
+  setTimeout(hideStatus, 2500);
+  await aggiornaLista();
+});
+
+el('chkEsauriti').addEventListener('change', aggiornaLista);
+el('tabBarcode').addEventListener('click', () => attivaTab('barcode'));
+el('tabOriginale').addEventListener('click', () => attivaTab('originale'));
+
+el('btnChiudiModal').addEventListener('click', () => {
+  el('modalCassa').classList.remove('open');
+  buonoCorrenteId = null;
   if (wakeLock) {
-    wakeLock.release();
+    wakeLock.release().catch(() => {});
     wakeLock = null;
   }
-  renderLista();
 });
 
-document.getElementById('btnScala').addEventListener('click', () => {
-  const val = parseFloat(document.getElementById('inputSpesa').value);
-  if (isNaN(val) || val <= 0) return;
-  scalaImporto(val);
-});
+async function applicaSpesa(importoSpeso) {
+  const buono = buoniCache.find((b) => b.id === buonoCorrenteId);
+  if (!buono) return;
+  if (isNaN(importoSpeso) || importoSpeso <= 0) return;
 
-document.getElementById('btnUsaTutto').addEventListener('click', () => {
-  const b = buoni.find(item => item.id === buonoAttivoId);
-  if (b && b.residuo > 0) scalaImporto(b.residuo);
-});
-
-function scalaImporto(spesa) {
-  const b = buoni.find(item => item.id === buonoAttivoId);
-  if (!b) return;
-  const effettivo = Math.min(spesa, b.residuo);
-  b.residuo = Math.round((b.residuo - effettivo) * 100) / 100;
-  b.movimenti.unshift({
-    data: new Date().toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
-    importo: effettivo
+  const spesoReale = Math.min(buono.residuo, importoSpeso);
+  buono.residuo = Math.max(0, Math.round((buono.residuo - spesoReale) * 100) / 100);
+  buono.movimenti = buono.movimenti || [];
+  buono.movimenti.unshift({
+    data: new Date().toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    speso: spesoReale,
+    residuoDopo: buono.residuo
   });
-  salvaStorage();
-  document.getElementById('cassaResiduo').textContent = formatEuro(b.residuo);
-  document.getElementById('inputSpesa').value = '';
-  renderMovimenti(b);
+
+  await saveBuono(buono);
+  el('cassaResiduo').textContent = formatEuro(buono.residuo);
+  el('inputSpesaParziale').value = '';
+  renderMovimenti(buono);
+  await aggiornaLista();
 }
 
-document.getElementById('btnEliminaBuono').addEventListener('click', () => {
-  if (!confirm('Eliminare definitivamente questo buono?')) return;
-  buoni = buoni.filter(item => item.id !== buonoAttivoId);
-  salvaStorage();
-  document.getElementById('btnChiudiCassa').click();
+el('btnScalaImporto').addEventListener('click', () => {
+  const val = parseFloat(el('inputSpesaParziale').value);
+  applicaSpesa(val);
 });
 
-// Backup & Ripristino JSON
-document.getElementById('btnExport').addEventListener('click', () => {
-  const dataStr = JSON.stringify({
-    buoni,
-    negoziCustom: JSON.parse(localStorage.getItem('negozi_custom_v1') || '[]')
-  }, null, 2);
-  const blob = new Blob([dataStr], { type: 'application/json' });
+el('btnUsaTutto').addEventListener('click', () => {
+  const buono = buoniCache.find((b) => b.id === buonoCorrenteId);
+  if (buono && buono.residuo > 0) {
+    applicaSpesa(buono.residuo);
+  }
+});
+
+el('btnEliminaBuono').addEventListener('click', async () => {
+  if (!buonoCorrenteId) return;
+  if (confirm('Vuoi eliminare definitivamente questo buono?')) {
+    await deleteBuono(buonoCorrenteId);
+    el('btnChiudiModal').click();
+    await aggiornaLista();
+  }
+});
+
+// Backup & Ripristino
+el('btnBackup').addEventListener('click', async () => {
+  const tutti = await getAllBuoni();
+  const payload = {
+    versione: '2.2',
+    dataExport: new Date().toISOString(),
+    negoziCustom: JSON.parse(localStorage.getItem('negozi_custom_v1') || '[]'),
+    buoni: tutti
+  };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -250,30 +323,38 @@ document.getElementById('btnExport').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-const backupInput = document.getElementById('backupInput');
-document.getElementById('btnImportBackup').addEventListener('click', () => backupInput.click());
-backupInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
+el('btnRipristina').addEventListener('click', () => el('inputRipristina').click());
+el('inputRipristina').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    try {
-      const parsed = JSON.parse(ev.target.result);
-      if (Array.isArray(parsed.buoni)) {
-        buoni = parsed.buoni;
-        salvaStorage();
-        if (Array.isArray(parsed.negoziCustom)) {
-          localStorage.setItem('negozi_custom_v1', JSON.stringify(parsed.negoziCustom));
-        }
-        renderLista();
-        alert('Backup ripristinato con successo!');
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (Array.isArray(data.buoni)) {
+      await clearAndImportAll(data.buoni);
+      if (Array.isArray(data.negoziCustom)) {
+        localStorage.setItem('negozi_custom_v1', JSON.stringify(data.negoziCustom));
       }
-    } catch (err) {
-      alert('File di backup non valido.');
+      await aggiornaLista();
+      showStatus('✅ Backup ripristinato con successo!', 'ok');
+      setTimeout(hideStatus, 2500);
+    } else {
+      throw new Error('Formato file non valido');
     }
-  };
-  reader.readAsText(file);
-  backupInput.value = '';
+  } catch (err) {
+    showStatus('❌ Errore ripristino backup: ' + err.message, 'err');
+  }
+  e.target.value = '';
 });
 
-renderLista();
+// Service Worker & Web Share Target
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SHARED_FILE' && event.data.file) {
+      gestisciFileCaricato(event.data.file);
+    }
+  });
+}
+
+aggiornaLista();
