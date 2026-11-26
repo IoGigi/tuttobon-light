@@ -1,0 +1,30 @@
+{
+  "name": "Wallet Buoni Spesa",
+  "short_name": "Buoni Spesa",
+  "description": "Gestione offline buoni spesa Amilon, Mig for You e BuyOn",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./index.html",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "buono",
+          "accept": ["image/*", "application/pdf"]
+        }
+      ]
+    }
+  }
+}
